@@ -1,0 +1,37 @@
+{
+  "name": "ZGCP Dev Workspace",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/kubectl-helm-minikube:1": {
+      "kubectl": "latest",
+      "helm": "latest",
+      "minikube": "none"
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    },
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.11"
+    }
+  },
+
+  "postCreateCommand": ".devcontainer/setup.sh",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-kubernetes-tools.vscode-kubernetes-tools",
+        "ms-playwright.playwright",
+        "anthropics.claude-code"
+      ]
+    }
+  },
+
+  "forwardPorts": [8080, 3000],
+
+  "remoteEnv": {
+    "KUBECONFIG": "${containerEnv:HOME}/.kube/config"
+  }
+}
