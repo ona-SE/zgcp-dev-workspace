@@ -25,7 +25,7 @@ tasks:
     command: |
       echo "Configuring kubectl for cluster: ${ZGCP_TARGET_CLUSTER:-nonprod-cluster}"
       kubectl-oidc_login setup \
-        --oidc-issuer-url=https://zillow.okta.com \
+        --oidc-issuer-url=${OIDC_ISSUER_URL} \
         --oidc-client-id=${OKTA_CLIENT_ID} \
         --oidc-extra-scope=groups
       echo "Cluster access configured. Run 'kubectl get pods' to verify."
@@ -50,5 +50,5 @@ tasks:
     name: Run E2E Tests
     description: Execute Playwright tests against the review environment
     command: |
-      export BASE_URL="https://${ZGCP_REVIEW_NAMESPACE}.review.zgcp.zillow.net"
+      export BASE_URL="${REVIEW_ENVIRONMENT_URL}"
       npx playwright test --project=chromium
