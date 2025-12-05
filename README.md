@@ -1,6 +1,6 @@
 # ZGCP Dev Workspace
 
-Development environment configured for Zillow's ZGCP workflow with kubectl access, Telepresence for remocal development, Playwright for browser automation, and Claude Code for AI-assisted development.
+Development environment configured for ZGCP workflow with kubectl access, Telepresence for remocal development, Playwright for browser automation, and Claude Code for AI-assisted development.
 
 ## Features
 
