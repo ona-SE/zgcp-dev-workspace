@@ -92,7 +92,7 @@ telepresence list
 
 ### Run Playwright tests locally
 ```bash
-export BASE_URL="https://${ZGCP_REVIEW_NAMESPACE}.review.zgcp.zillow.net"
+export BASE_URL="${REVIEW_ENVIRONMENT_URL}"
 npx playwright test
 ```
 
@@ -119,5 +119,5 @@ gitpod automations service start telepresence-daemon
 ### Playwright tests fail
 Verify the review environment URL is accessible:
 ```bash
-curl -I "https://${ZGCP_REVIEW_NAMESPACE}.review.zgcp.zillow.net"
+curl -I "${REVIEW_ENVIRONMENT_URL}"
 ```
