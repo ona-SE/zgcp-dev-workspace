@@ -1,34 +1,20 @@
 {
-  "name": "ZGCP Dev Workspace with OnaFlix",
-  "build": {
-    "dockerfile": "Dockerfile",
-    "context": "..",
-    "options": [
-      "--build-arg", "BUILDKIT_INLINE_CACHE=1"
-    ]
-  },
+  "name": "ZGCP Dev Workspace",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+
   "features": {
-    "ghcr.io/devcontainers/features/common-utils:2": {
-      "installZsh": true,
-      "configureZshAsDefaultShell": true,
-      "installGit": false,
-      "installGitLFS": false,
-      "installGithubCli": false
-    },
-    "ghcr.io/devcontainers/features/github-cli:1": {},
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {
-      "version": "20.10",
-      "moby": false
-    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
     "ghcr.io/devcontainers/features/kubectl-helm-minikube:1": {
       "kubectl": "latest",
       "helm": "latest",
       "minikube": "none"
     },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    },
     "ghcr.io/devcontainers/features/python:1": {
       "version": "3.11"
-    },
-    "ghcr.io/warrenbuckley/codespace-features/sqlite:1": {}
+    }
   },
 
   "postCreateCommand": ".devcontainer/setup.sh",
@@ -38,55 +24,14 @@
       "extensions": [
         "ms-kubernetes-tools.vscode-kubernetes-tools",
         "ms-playwright.playwright",
-        "anthropics.claude-code",
-        "GitHub.copilot",
-        "RooVeterinaryInc.roo-cline",
-        "saoudrizwan.claude-dev",
-        "dbaeumer.vscode-eslint",
-        "esbenp.prettier-vscode",
-        "mtxr.sqltools",
-        "mtxr.sqltools-driver-sqlite",
-        "mtxr.sqltools-driver-pg",
-        "bradlc.vscode-tailwindcss"
-      ],
-      "settings": {
-        "editor.formatOnSave": true,
-        "editor.codeActionsOnSave": {
-          "source.fixAll.eslint": true
-        },
-        "typescript.preferences.importModuleSpecifier": "relative"
-      }
+        "anthropics.claude-code"
+      ]
     }
   },
 
-  "forwardPorts": [8080, 3000, 3001, 5432],
-
-  "portsAttributes": {
-    "3000": {
-      "label": "Ona Flix",
-      "onAutoForward": "openPreview"
-    },
-    "3001": {
-      "label": "Catalog Service"
-    },
-    "5432": {
-      "label": "PostgreSQL"
-    },
-    "8080": {
-      "label": "ZGCP Service"
-    }
-  },
+  "forwardPorts": [8080, 3000],
 
   "remoteEnv": {
     "KUBECONFIG": "${containerEnv:HOME}/.kube/config"
-  },
-
-  "remoteUser": "node",
-
-  "mounts": [
-    "source=onaflix-node-modules,target=${containerWorkspaceFolder}/ona-flix/node_modules,type=volume",
-    "source=onaflix-frontend-node-modules,target=${containerWorkspaceFolder}/ona-flix/frontend/node_modules,type=volume",
-    "source=onaflix-catalog-node-modules,target=${containerWorkspaceFolder}/ona-flix/backend/catalog/node_modules,type=volume",
-    "source=onaflix-npm-cache,target=/root/.npm,type=volume"
-  ]
+  }
 }
