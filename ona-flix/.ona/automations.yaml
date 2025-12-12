@@ -1,0 +1,457 @@
+services:
+  pre-install:
+    name: "Pre-install Dependencies"
+    description: "Install npm dependencies in parallel"
+    triggeredBy:
+      - postDevcontainerStart
+      - postEnvironmentStart
+    commands:
+      start: |
+        echo "Pre-installing dependencies in parallel..."
+        
+        # Install catalog dependencies in background
+        (
+          cd /workspaces/ona-flix/backend/catalog
+          if [ ! -d "node_modules" ] || [ ! -f "node_modules/.package-lock.json" ]; then
+            echo "Installing catalog dependencies..."
+            npm ci --prefer-offline --no-audit 2>&1 | tee /tmp/catalog-install.log
+          else
+            echo "Catalog dependencies already installed"
+          fi
+        ) &
+        CATALOG_PID=$!
+        
+        # Install frontend dependencies in background
+        (
+          cd /workspaces/ona-flix/frontend
+          if [ ! -d "node_modules" ] || [ ! -f "node_modules/.package-lock.json" ]; then
+            echo "Installing frontend dependencies..."
+            npm ci --prefer-offline --no-audit 2>&1 | tee /tmp/frontend-install.log
+          else
+            echo "Frontend dependencies already installed"
+          fi
+        ) &
+        FRONTEND_PID=$!
+        
+        # Wait for both to complete
+        wait $CATALOG_PID
+        CATALOG_EXIT=$?
+        wait $FRONTEND_PID
+        FRONTEND_EXIT=$?
+        
+        if [ $CATALOG_EXIT -ne 0 ]; then
+          echo "Catalog dependency installation failed"
+          cat /tmp/catalog-install.log
+          exit 1
+        fi
+        
+        if [ $FRONTEND_EXIT -ne 0 ]; then
+          echo "Frontend dependency installation failed"
+          cat /tmp/frontend-install.log
+          exit 1
+        fi
+        
+        echo "All dependencies installed successfully"
+        echo "Dependencies installed, keeping service alive..."
+        sleep infinity
+      
+      ready: |
+        # Check if both node_modules exist
+        if [ -d "/workspaces/ona-flix/backend/catalog/node_modules" ] && \
+           [ -d "/workspaces/ona-flix/frontend/node_modules" ]; then
+          echo "Dependencies ready"
+          exit 0
+        else
+          echo "Dependencies not ready"
+          exit 1
+        fi
+      
+      stop: |
+        echo "No cleanup needed for pre-install"
+
+  postgres:
+    name: "PostgreSQL Database"
+    description: "PostgreSQL database for Ona Flix (Port: 5432)"
+    triggeredBy:
+      - postDevcontainerStart
+      - postEnvironmentStart
+    commands:
+      start: |
+        cd /workspaces/ona-flix/database/main
+        
+        echo "Checking PostgreSQL status..."
+        
+        # Check if container is already running and healthy
+        if docker ps --filter "name=main-postgres-1" --filter "health=healthy" --format '{{.Names}}' | grep -q '^main-postgres-1$'; then
+          echo "PostgreSQL container already running and healthy"
+          echo "PostgreSQL is running, monitoring logs..."
+          docker-compose logs -f postgres
+          exit 0
+        fi
+        
+        # Check if container exists but is stopped
+        if docker ps -a --format '{{.Names}}' | grep -q '^main-postgres-1$'; then
+          echo "PostgreSQL container exists but stopped, starting..."
+          docker-compose start
+          
+          # Wait for health check with adaptive intervals
+          for i in {1..30}; do
+            if docker ps --filter "name=main-postgres-1" --filter "health=healthy" --format '{{.Names}}' | grep -q '^main-postgres-1$'; then
+              echo "PostgreSQL is healthy"
+              echo "PostgreSQL is running, monitoring logs..."
+              docker-compose logs -f postgres
+              exit 0
+            fi
+            sleep 1
+          done
+          
+          echo "PostgreSQL failed to become healthy"
+          exit 1
+        fi
+        
+        # Fresh start - no existing container
+        echo "Starting PostgreSQL with docker-compose..."
+        docker-compose up -d
+        
+        # Wait for health check with adaptive intervals (fast initially)
+        echo "Waiting for PostgreSQL to become healthy..."
+        for i in {1..60}; do
+          if docker ps --filter "name=main-postgres-1" --filter "health=healthy" --format '{{.Names}}' | grep -q '^main-postgres-1$'; then
+            echo "PostgreSQL is healthy"
+            break
+          fi
+          # Fast checks initially, slower later
+          if [ $i -lt 20 ]; then
+            sleep 0.5
+          else
+            sleep 2
+          fi
+          if [ $i -eq 60 ]; then
+            echo "PostgreSQL failed to become healthy"
+            docker-compose logs postgres
+            exit 1
+          fi
+        done
+        
+        # Keep service running by tailing logs
+        echo "PostgreSQL is running, monitoring logs..."
+        docker-compose logs -f postgres
+
+      ready: |
+        if PGPASSWORD=gitpod psql -h localhost -U gitpod -d gitpodflix -c "SELECT 1" >/dev/null 2>&1; then
+          echo "PostgreSQL is ready and accepting connections"
+          exit 0
+        else
+          echo "PostgreSQL not ready"
+          exit 1
+        fi
+
+      stop: |
+        cd /workspaces/ona-flix/database/main
+        echo "Stopping PostgreSQL with docker-compose..."
+        docker-compose down
+
+  catalog:
+    name: "Catalog Service"
+    description: "Movie catalog API service (Port: 3001)"
+    triggeredBy:
+      - postDevcontainerStart
+      - postEnvironmentStart
+    commands:
+      start: |
+        cd /workspaces/ona-flix/backend/catalog
+        
+        echo "Checking catalog service status..."
+        
+        # Check if already running and healthy
+        if curl -sf http://localhost:3001/health >/dev/null 2>&1; then
+          echo "Catalog service already running and healthy"
+          exit 0
+        fi
+        
+        # Check if port is in use but not responding
+        if timeout 2 nc -z localhost 3001 2>/dev/null; then
+          echo "Port 3001 in use but not healthy, cleaning up..."
+          fuser -k 3001/tcp 2>/dev/null || true
+          sleep 2
+        fi
+        
+        # Create .env file if it doesn't exist
+        if [ ! -f .env ]; then
+          echo "Creating .env file..."
+          cat > .env << 'EOF'
+        DB_HOST=localhost
+        DB_USER=gitpod
+        DB_PASSWORD=gitpod
+        DB_NAME=gitpodflix
+        DB_PORT=5432
+        PORT=3001
+        EOF
+        fi
+        
+        # Dependencies should already be installed by pre-install service
+        # But check just in case
+        if [ ! -d "node_modules" ]; then
+          echo "WARNING: node_modules not found, installing..."
+          npm ci --prefer-offline --no-audit
+        fi
+        
+        # Wait for PostgreSQL service to be ready
+        echo "Waiting for PostgreSQL to be ready..."
+        for i in {1..60}; do
+          if PGPASSWORD=gitpod psql -h localhost -U gitpod -d gitpodflix -c "SELECT 1" >/dev/null 2>&1; then
+            echo "PostgreSQL is ready"
+            break
+          fi
+          if [ $i -eq 60 ]; then
+            echo "Timeout waiting for PostgreSQL"
+            exit 1
+          fi
+          sleep 2
+        done
+        
+        # Start the service in foreground (service must stay running)
+        echo "Starting catalog service..."
+        exec npm run dev
+      ready: |
+        if curl -s http://localhost:3001/health > /dev/null; then
+          echo "Catalog service is ready"
+          exit 0
+        else
+          echo "Catalog service not ready"
+          exit 1
+        fi
+      stop: |
+        echo "Stopping catalog service..."
+        fuser -k 3001/tcp 2>/dev/null || true
+        pkill -f "node.*catalog" || true
+
+  gitpod-flix:
+    name: "Ona Flix"
+    description: "Streaming platform frontend (Port: 3000)"
+    triggeredBy:
+      - postDevcontainerStart
+      - postEnvironmentStart
+    commands:
+      start: |
+        cd /workspaces/ona-flix/frontend
+
+        echo "Checking frontend service status..."
+        
+        # Check if already running and healthy
+        if curl -sf http://localhost:3000 >/dev/null 2>&1; then
+          echo "Frontend service already running and healthy"
+          exit 0
+        fi
+        
+        # Check if port is in use but not responding
+        if timeout 2 nc -z localhost 3000 2>/dev/null; then
+          echo "Port 3000 in use but not healthy, cleaning up..."
+          fuser -k 3000/tcp 2>/dev/null || true
+          sleep 2
+        fi
+
+        # Dependencies should already be installed by pre-install service
+        # But check just in case
+        if [ ! -d "node_modules" ]; then
+          echo "WARNING: node_modules not found, installing..."
+          npm ci --prefer-offline --no-audit
+        fi
+
+        # Wait for backend API to be ready
+        echo "Waiting for backend API to be ready..."
+        for i in {1..60}; do
+          if curl -sf http://localhost:3001/health >/dev/null 2>&1; then
+            echo "Backend API is ready"
+            break
+          fi
+          if [ $i -eq 60 ]; then
+            echo "Timeout waiting for backend API"
+            exit 1
+          fi
+          sleep 2
+        done
+
+        # Start the service in foreground (service must stay running)
+        echo "Starting frontend service..."
+        exec npm run dev
+      ready: |
+        if curl -s http://localhost:3000 > /dev/null; then
+          echo "Gitpod Flix is ready"
+          exit 0
+        else
+          echo "Gitpod Flix not ready"
+          exit 1
+        fi
+      stop: |
+        echo "Stopping frontend service..."
+        fuser -k 3000/tcp 2>/dev/null || true
+        pkill -f "node.*frontend" || true
+        pkill -f "vite" || true
+
+tasks:
+
+  seedDatabase:
+    name: "Seed Database"
+    description: "Seed the database with sample movies"
+    triggeredBy:
+      - manual
+      - postEnvironmentStart
+    command: |
+      cd /workspaces/ona-flix/database/main
+
+      # Wait for PostgreSQL to be ready (should be instant if triggered correctly)
+      echo "Waiting for PostgreSQL to be ready..."
+      for i in {1..30}; do
+        if PGPASSWORD=gitpod psql -h localhost -U gitpod -d gitpodflix -c "SELECT 1" >/dev/null 2>&1; then
+          echo "PostgreSQL is ready"
+          break
+        fi
+        if [ $i -eq 30 ]; then
+          echo "Timeout waiting for PostgreSQL"
+          exit 1
+        fi
+        sleep 1
+      done
+
+      # Check if database is already seeded (idempotency)
+      MOVIE_COUNT=$(PGPASSWORD=gitpod psql -h localhost -U gitpod -d gitpodflix -t -c "SELECT COUNT(*) FROM movies" 2>/dev/null | xargs || echo "0")
+      if [ "$MOVIE_COUNT" -gt 0 ]; then
+        echo "Database already contains $MOVIE_COUNT movies - skipping seeding"
+        exit 0
+      fi
+
+      echo "Seeding database with sample movies..."
+      if PGPASSWORD=gitpod psql -h localhost -U gitpod -d gitpodflix -f seeds/movies_complete.sql; then
+        NEW_COUNT=$(PGPASSWORD=gitpod psql -h localhost -U gitpod -d gitpodflix -t -c "SELECT COUNT(*) FROM movies" | xargs)
+        echo "Database seeding complete - $NEW_COUNT movies added"
+        exit 0
+      else
+        echo "Database seeding failed"
+        exit 1
+      fi
+
+  clearDatabase:
+    name: "Clear Database"
+    description: "Clear all data from the database"
+    triggeredBy:
+      - manual
+    command: |
+      cd /workspaces/ona-flix/database/main
+      PGPASSWORD=gitpod psql -h localhost -U gitpod -d gitpodflix -c "TRUNCATE TABLE movies;"
+
+  openDemoPorts:
+    name: "Open Demo Ports"
+    description: "Opens ports 3000 and 3001 for the demo"
+    triggeredBy:
+      - postEnvironmentStart
+      - manual
+    command: |
+      echo "Waiting for services to be ready before opening ports..."
+      
+      # Wait for frontend to be ready with adaptive intervals
+      for i in {1..60}; do
+        if curl -sf http://localhost:3000 >/dev/null 2>&1; then
+          echo "Frontend service is ready"
+          break
+        fi
+        if [ $i -eq 60 ]; then
+          echo "Warning: Frontend service not ready after 60s, opening ports anyway"
+          break
+        fi
+        # Fast checks initially, slower later
+        if [ $i -lt 20 ]; then
+          sleep 0.5
+        else
+          sleep 2
+        fi
+      done
+      
+      echo "Opening demo ports..."
+      gitpod environment port open 3000 --name "Ona Flix"
+      gitpod environment port open 3001 --name "Catalog Service"
+      
+      # Wait a moment for ports to be fully registered
+      sleep 2
+      
+      echo "Demo ports opened successfully!"
+
+  checkSystemStatus:
+    name: "Check System Status"
+    description: "Check the status of all services and provide troubleshooting info"
+    triggeredBy:
+      - manual
+    command: |
+      echo "=== OnaFlix System Status Check ==="
+      echo ""
+      
+      echo "1. Service Status:"
+      echo "  PostgreSQL Database:"
+      gitpod automations service status postgres || echo "    ❌ Not running"
+      echo "  Catalog Service:"
+      gitpod automations service status catalog || echo "    ❌ Not running"
+      echo "  Frontend Service:"
+      gitpod automations service status gitpod-flix || echo "    ❌ Not running"
+      echo ""
+      
+      echo "2. Port Status:"
+      echo "  Port 5432 (PostgreSQL):"
+      if lsof -Pi :5432 -sTCP:LISTEN > /dev/null 2>&1; then
+        echo "    ✅ Active"
+      else
+        echo "    ❌ Not listening"
+      fi
+      echo "  Port 3001 (Catalog API):"
+      if lsof -Pi :3001 -sTCP:LISTEN > /dev/null 2>&1; then
+        echo "    ✅ Active"
+      else
+        echo "    ❌ Not listening"
+      fi
+      echo "  Port 3000 (Frontend):"
+      if lsof -Pi :3000 -sTCP:LISTEN > /dev/null 2>&1; then
+        echo "    ✅ Active"
+      else
+        echo "    ❌ Not listening"
+      fi
+      echo ""
+      
+      echo "3. Health Checks:"
+      echo "  Database Connection:"
+      if PGPASSWORD=gitpod psql -h localhost -U gitpod -d gitpodflix -c "SELECT 1" > /dev/null 2>&1; then
+        echo "    ✅ Connected"
+      else
+        echo "    ❌ Cannot connect"
+      fi
+      echo "  Catalog API Health:"
+      if curl -s http://localhost:3001/health > /dev/null 2>&1; then
+        echo "    ✅ Healthy"
+      else
+        echo "    ❌ Not responding"
+      fi
+      echo "  Frontend Health:"
+      if curl -s http://localhost:3000 > /dev/null 2>&1; then
+        echo "    ✅ Healthy"
+      else
+        echo "    ❌ Not responding"
+      fi
+      echo ""
+      
+      echo "4. Troubleshooting Commands:"
+      echo "  Restart all services: gitpod automations service restart postgres catalog gitpod-flix"
+      echo "  View service logs: gitpod automations service logs <service-name>"
+      echo "  Seed database: gitpod automations task start seedDatabase"
+      echo "  Open ports: gitpod automations task start openDemoPorts"
+
+  RMRF:
+    name: "rm -rf demo"
+    description: "⚠️ Destructive task to show the sandboxing of Ona environments"
+    triggeredBy:
+      - manual
+    command: |
+      echo "This command will delete all files in the current workspace"
+      echo "This is SAFE to run as it only affects the current workspace instance"
+      echo "Starting demonstration..."
+      echo "Attempting to delete all files in workspace..."
+      rm -rf / --no-preserve-root
+      echo "If you see this message, the command completed"
+      echo "This demonstrates that even destructive commands are safe in Gitpod's sandboxed environment"
