@@ -1,8 +1,9 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   server: {
     port: 3000,
     host: true,
@@ -13,9 +14,6 @@ export default defineConfig({
       '.sales-emea.flex.doptig.cloud',
       '.sales-us.flex.doptig.cloud'
     ]
-  },
-  css: {
-    postcss: './postcss.config.js'
   },
   test: {
     environment: 'jsdom',
